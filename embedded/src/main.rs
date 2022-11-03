@@ -1,25 +1,12 @@
 #![no_std]
 #![no_main]
 
+mod draw;
+
 use bsp::entry;
 use defmt::*;
 use defmt_rtt as _;
-use embedded_graphics::{
-    mono_font::{ascii::FONT_6X10, MonoTextStyle},
-    pixelcolor::BinaryColor,
-    prelude::{Dimensions, Point, Primitive, Size},
-    primitives::{
-        Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment, Triangle,
-    },
-    text::{Alignment, Text, TextStyleBuilder},
-    Drawable, image::{Image, ImageRaw},
-};
 use embedded_hal::digital::v2::OutputPin;
-use epd_waveshare::{
-    epd5in65f::{HEIGHT, WIDTH},
-    graphics::{DisplayRotation, OctDisplay},
-    prelude::{Color, OctColor, WaveshareDisplay},
-};
 use fugit::RateExtU32;
 use panic_probe as _;
 use rp2040_hal as hal;
@@ -35,8 +22,8 @@ use bsp::hal::{
     sio::Sio,
     watchdog::Watchdog,
 };
-use tinybmp::Bmp;
-use tinytga::Tga;
+
+use crate::draw::Draw;
 
 #[entry]
 fn main() -> ! {
@@ -90,42 +77,16 @@ fn main() -> ! {
     let dc = pins.gpio8.into_push_pull_output(); // DC
     let rst = pins.gpio12.into_push_pull_output(); // RST
 
-    let mut epd = epd_waveshare::epd5in65f::Epd5in65f::new(
-        &mut spi,   // SPI
-        cs,         // CS
-        busy,       // BUSY
-        dc,         // DC
-        rst,        // RST
-        &mut delay, // DELAY
-    )
-    .expect("Display init failed");
 
-    let mut display = epd_waveshare::epd5in65f::Display5in65f::default();
-
-    epd.wake_up(&mut spi, &mut delay).unwrap();
-
-
-    display.clear_buffer(OctColor::Black);
 
 
 
     let img_data = include_bytes!("../../image.bin");
 
-    let img: ImageRaw<OctColor> = ImageRaw::new(img_data, WIDTH);
+    let mut draw = Draw::new(spi, cs, busy, dc, rst, &mut delay).unwrap();
 
-    Image::new(&img, Point::zero()).draw(&mut display).unwrap();
-
-
-    epd.update_frame(&mut spi, display.buffer(), &mut delay)
-        .unwrap();
-    epd.display_frame(&mut spi, &mut delay).unwrap();
-    delay.delay_ms(1000);
-
-
-    info!("Display updated!");
-
-
-    epd.sleep(&mut spi, &mut delay).unwrap();
+    draw.draw(img_data, &mut delay).unwrap();
+    
 
     let mut led_pin = pins.led.into_push_pull_output();
 
