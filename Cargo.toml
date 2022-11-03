@@ -1,4 +1,7 @@
 [workspace]
 members = [
-    "dank-image"
+    "dank-image",
+]
+exclude = [
+    "embedded"
 ]
