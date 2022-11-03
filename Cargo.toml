@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "dank-image",
+    "dank-server",
 ]
 exclude = [
     "embedded"

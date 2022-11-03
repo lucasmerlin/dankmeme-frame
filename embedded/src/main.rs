@@ -8,9 +8,10 @@ use core::future::Future;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_net::tcp::TcpSocket;
-use embassy_net::{Stack, StackResources};
+use embassy_net::{Stack, StackResources, Ipv4Address};
 use embassy_rp::gpio::{Flex, Level, Output};
 use embassy_rp::peripherals::{PIN_23, PIN_24, PIN_25, PIN_29};
+use embassy_time::{Timer, Duration};
 use embedded_hal_1::spi::ErrorType;
 use embedded_hal_async::spi::{ExclusiveDevice, SpiBusFlush, SpiBusRead, SpiBusWrite};
 use embedded_io::asynch::{Read, Write};
@@ -112,16 +113,25 @@ async fn main(spawner: Spawner) {
     let mut buf = [0; 4096];
 
     loop {
+
+        info!("Making http request...");
+
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
         socket.set_timeout(Some(embassy_net::SmolDuration::from_secs(10)));
 
-        info!("Listening on TCP:1234...");
-        if let Err(e) = socket.accept(1234).await {
-            warn!("accept error: {:?}", e);
+
+
+        info!("Connecting to 1.1.1.1....");
+        if let Err(e) = socket.connect((Ipv4Address::new(192, 168, 178, 105), 8080)).await {
+            warn!("error: {:?}", e);
+
+            Timer::after(Duration::from_millis(5000)).await;
             continue;
         }
 
         info!("Received connection from {:?}", socket.remote_endpoint());
+
+        socket.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
 
         loop {
             let n = match socket.read(&mut buf).await {
@@ -138,14 +148,14 @@ async fn main(spawner: Spawner) {
 
             info!("rxd {:02x}", &buf[..n]);
 
-            match socket.write_all(&buf[..n]).await {
-                Ok(()) => {}
-                Err(e) => {
-                    warn!("write error: {:?}", e);
-                    break;
-                }
-            };
+            let string = core::str::from_utf8(&&buf[..n]).unwrap();
+
+            info!("received: {}", string);
         }
+
+        println!("Finished....");
+
+        Timer::after(Duration::from_millis(5000)).await;
     }
 }
 
