@@ -1,102 +1,239 @@
 #![no_std]
 #![no_main]
+#![feature(type_alias_impl_trait)]
 
-mod draw;
+use core::convert::Infallible;
+use core::future::Future;
 
-use bsp::entry;
 use defmt::*;
-use defmt_rtt as _;
-use embedded_hal::digital::v2::OutputPin;
-use fugit::RateExtU32;
-use panic_probe as _;
-use rp2040_hal as hal;
+use embassy_executor::Spawner;
+use embassy_net::tcp::TcpSocket;
+use embassy_net::{Stack, StackResources};
+use embassy_rp::gpio::{Flex, Level, Output};
+use embassy_rp::peripherals::{PIN_23, PIN_24, PIN_25, PIN_29};
+use embedded_hal_1::spi::ErrorType;
+use embedded_hal_async::spi::{ExclusiveDevice, SpiBusFlush, SpiBusRead, SpiBusWrite};
+use embedded_io::asynch::{Read, Write};
+use static_cell::StaticCell;
+use {defmt_rtt as _, panic_probe as _};
 
-// Provide an alias for our BSP so we can switch targets quickly.
-// Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
-use rp_pico as bsp;
-// use sparkfun_pro_micro_rp2040 as bsp;
+macro_rules! singleton {
+    ($val:expr) => {{
+        type T = impl Sized;
+        static STATIC_CELL: StaticCell<T> = StaticCell::new();
+        STATIC_CELL.init_with(move || $val)
+    }};
+}
 
-use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    pac,
-    sio::Sio,
-    watchdog::Watchdog,
-};
+#[embassy_executor::task]
+async fn wifi_task(
+    runner: cyw43::Runner<
+        'static,
+        Output<'static, PIN_23>,
+        ExclusiveDevice<MySpi, Output<'static, PIN_25>>,
+    >,
+) -> ! {
+    runner.run().await
+}
 
-use crate::draw::Draw;
+#[embassy_executor::task]
+async fn net_task(stack: &'static Stack<cyw43::NetDevice<'static>>) -> ! {
+    stack.run().await
+}
 
-#[entry]
-fn main() -> ! {
-    info!("Program start");
-    let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
+    info!("Hello World!");
 
-    // External high-speed crystal on the pico board is 12Mhz
-    let external_xtal_freq_hz = 12_000_000u32;
-    let clocks = init_clocks_and_plls(
-        external_xtal_freq_hz,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
-        &mut watchdog,
-    )
-    .ok()
-    .unwrap();
+    let p = embassy_rp::init(Default::default());
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    // Include the WiFi firmware and Country Locale Matrix (CLM) blobs.
+    let fw = include_bytes!("../firmware/43439A0.bin");
+    let clm = include_bytes!("../firmware/43439A0_clm.bin");
 
-    let pins = bsp::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
+    // To make flashing faster for development, you may want to flash the firmwares independently
+    // at hardcoded addresses, instead of baking them into the program with `include_bytes!`:
+    //     probe-rs-cli download 43439A0.bin --format bin --chip RP2040 --base-address 0x10100000
+    //     probe-rs-cli download 43439A0.clm_blob --format bin --chip RP2040 --base-address 0x10140000
+    //let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) };
+    //let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
 
-    // SPI declaration
-    let _spi_sclk = pins.gpio10.into_mode::<hal::gpio::FunctionSpi>();
-    let _spi_mosi = pins.gpio11.into_mode::<hal::gpio::FunctionSpi>();
-    let spi = hal::spi::Spi::<_, _, 8>::new(pac.SPI1);
+    let pwr = Output::new(p.PIN_23, Level::Low);
+    let cs = Output::new(p.PIN_25, Level::High);
+    let clk = Output::new(p.PIN_29, Level::Low);
+    let mut dio = Flex::new(p.PIN_24);
+    dio.set_low();
+    dio.set_as_output();
 
-    let mut spi = spi.init(
-        &mut pac.RESETS,
-        clocks.peripheral_clock.freq(),
-        // you can put cookie (increase the speed) in it but I don't recommend it.
-        4_000_000u32.Hz(),
-        &embedded_hal::spi::MODE_0,
-    );
-    // End of SPI declaration
+    let bus = MySpi { clk, dio };
+    let spi = ExclusiveDevice::new(bus, cs);
 
-    // Start the rest of pins needed to communicate with the screen
-    let mut cs = pins.gpio9.into_push_pull_output(); // CS
-    cs.set_high().unwrap();
-    let busy = pins.gpio13.into_pull_up_input(); // BUSY
-    let dc = pins.gpio8.into_push_pull_output(); // DC
-    let rst = pins.gpio12.into_push_pull_output(); // RST
+    let state = singleton!(cyw43::State::new());
+    let (mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
 
+    spawner.spawn(wifi_task(runner)).unwrap();
 
+    let net_device = control.init(clm).await;
 
+    const WIFI_CONFIG: &str = include_str!("../.env");
+    let NETWORK: &str = WIFI_CONFIG.split(";").next().unwrap();
+    let PASSWORD: &str = WIFI_CONFIG.split(";").last().unwrap();
 
+    debug!("SSID: {}", NETWORK);
+    debug!("Password: {}", PASSWORD);
 
-    let img_data = include_bytes!("../../image.bin");
+    //control.join_open(env!("WIFI_NETWORK")).await;
+    control.join_wpa2(NETWORK, PASSWORD).await;
 
-    let mut draw = Draw::new(spi, cs, busy, dc, rst, &mut delay).unwrap();
+    let config = embassy_net::ConfigStrategy::Dhcp;
+    //let config = embassy_net::ConfigStrategy::Static(embassy_net::Config {
+    //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
+    //    dns_servers: Vec::new(),
+    //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
+    //});
 
-    draw.draw(img_data, &mut delay).unwrap();
-    
+    // Generate random seed
+    let seed = 0x0123_4567_89ab_cdef; // chosen by fair dice roll. guarenteed to be random.
 
-    let mut led_pin = pins.led.into_push_pull_output();
+    // Init network stack
+    let stack = &*singleton!(Stack::new(
+        net_device,
+        config,
+        singleton!(StackResources::<1, 2, 8>::new()),
+        seed
+    ));
 
-    // If the led blink, everything it's ok (big debug skills)
+    unwrap!(spawner.spawn(net_task(stack)));
+
+    // And now we can use it!
+
+    let mut rx_buffer = [0; 4096];
+    let mut tx_buffer = [0; 4096];
+    let mut buf = [0; 4096];
+
     loop {
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+        socket.set_timeout(Some(embassy_net::SmolDuration::from_secs(10)));
+
+        info!("Listening on TCP:1234...");
+        if let Err(e) = socket.accept(1234).await {
+            warn!("accept error: {:?}", e);
+            continue;
+        }
+
+        info!("Received connection from {:?}", socket.remote_endpoint());
+
+        loop {
+            let n = match socket.read(&mut buf).await {
+                Ok(0) => {
+                    warn!("read EOF");
+                    break;
+                }
+                Ok(n) => n,
+                Err(e) => {
+                    warn!("read error: {:?}", e);
+                    break;
+                }
+            };
+
+            info!("rxd {:02x}", &buf[..n]);
+
+            match socket.write_all(&buf[..n]).await {
+                Ok(()) => {}
+                Err(e) => {
+                    warn!("write error: {:?}", e);
+                    break;
+                }
+            };
+        }
     }
 }
 
-// End of file
+struct MySpi {
+    /// SPI clock
+    clk: Output<'static, PIN_29>,
+
+    /// 4 signals, all in one!!
+    /// - SPI MISO
+    /// - SPI MOSI
+    /// - IRQ
+    /// - strap to set to gSPI mode on boot.
+    dio: Flex<'static, PIN_24>,
+}
+
+impl ErrorType for MySpi {
+    type Error = Infallible;
+}
+
+impl SpiBusFlush for MySpi {
+    type FlushFuture<'a> = impl Future<Output = Result<(), Self::Error>>
+    where
+    Self: 'a;
+
+    fn flush<'a>(&'a mut self) -> Self::FlushFuture<'a> {
+        async move { Ok(()) }
+    }
+}
+
+impl SpiBusRead<u32> for MySpi {
+    type ReadFuture<'a> = impl Future<Output = Result<(), Self::Error>>
+    where
+    Self: 'a;
+
+    fn read<'a>(&'a mut self, words: &'a mut [u32]) -> Self::ReadFuture<'a> {
+        async move {
+            self.dio.set_as_input();
+            for word in words {
+                let mut w = 0;
+                for _ in 0..32 {
+                    w = w << 1;
+
+                    // rising edge, sample data
+                    if self.dio.is_high() {
+                        w |= 0x01;
+                    }
+                    self.clk.set_high();
+
+                    // falling edge
+                    self.clk.set_low();
+                }
+                *word = w
+            }
+
+            Ok(())
+        }
+    }
+}
+
+impl SpiBusWrite<u32> for MySpi {
+    type WriteFuture<'a> = impl Future<Output = Result<(), Self::Error>>
+    where
+    Self: 'a;
+
+    fn write<'a>(&'a mut self, words: &'a [u32]) -> Self::WriteFuture<'a> {
+        async move {
+            self.dio.set_as_output();
+            for word in words {
+                let mut word = *word;
+                for _ in 0..32 {
+                    // falling edge, setup data
+                    self.clk.set_low();
+                    if word & 0x8000_0000 == 0 {
+                        self.dio.set_low();
+                    } else {
+                        self.dio.set_high();
+                    }
+
+                    // rising edge
+                    self.clk.set_high();
+
+                    word = word << 1;
+                }
+            }
+            self.clk.set_low();
+
+            self.dio.set_as_input();
+            Ok(())
+        }
+    }
+}
