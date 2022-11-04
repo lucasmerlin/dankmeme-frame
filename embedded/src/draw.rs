@@ -1,30 +1,38 @@
-use defmt::info;
-use embedded_graphics::Drawable;
-use embedded_graphics::image::{ImageRaw, Image};
+use cyw43::NetDevice;
+use defmt::{info, warn};
+use embassy_net::{Stack, Ipv4Address};
+use embassy_net::tcp::TcpSocket;
+use embassy_time::{Delay, Duration, Timer};
+use embedded_graphics::image::{Image, ImageRaw};
 use embedded_graphics::prelude::Point;
+use embedded_graphics::Drawable;
 use embedded_hal::blocking::delay::DelayMs;
-use embedded_hal::blocking::spi::Write;
+use embedded_hal::blocking::spi::Write as SpiWrite;
 use embedded_hal::digital::v2::{InputPin, OutputPin};
-use epd_waveshare::epd5in65f::{Epd5in65f, WIDTH};
+use embedded_io::asynch::Write;
+use epd_waveshare::epd5in65f::{Display5in65f, Epd5in65f, WIDTH};
 use epd_waveshare::graphics::OctDisplay;
-use epd_waveshare::prelude::{WaveshareDisplay, OctColor};
-use rp2040_hal::spi::Disabled;
-use rp_pico::pac::SPI1;
+use epd_waveshare::prelude::{OctColor, WaveshareDisplay};
 
-pub struct Draw<SPI, CS, BUSY, DC, RST, DELAY> {
+use crate::dns::dns_request;
+
+pub struct Draw<SPI, CS, BUSY, DC, RST> {
     spi: SPI,
 
-    epd: Epd5in65f<SPI, CS, BUSY, DC, RST, DELAY>,
+    epd: Epd5in65f<SPI, CS, BUSY, DC, RST, Delay>,
+
+    display: Display5in65f,
+
+    delay: Delay,
 }
 
-impl<SPI, CS, BUSY, DC, RST, DELAY> Draw<SPI, CS, BUSY, DC, RST, DELAY>
+impl<SPI, CS, BUSY, DC, RST> Draw<SPI, CS, BUSY, DC, RST>
 where
-    SPI: Write<u8>,
+    SPI: SpiWrite<u8>,
     CS: OutputPin,
     BUSY: InputPin,
     DC: OutputPin,
     RST: OutputPin,
-    DELAY: DelayMs<u8>,
 {
     pub fn new(
         mut spi: SPI,
@@ -32,45 +40,133 @@ where
         busy: BUSY,
         dc: DC,
         rst: RST,
-        delay: &mut DELAY,
-    ) -> Result<Draw<SPI, CS, BUSY, DC, RST, DELAY>, SPI::Error> {
+    ) -> Result<Draw<SPI, CS, BUSY, DC, RST>, SPI::Error> {
+
+        let mut delay = Delay;
+
         let epd = Epd5in65f::new(
             &mut spi, // SPI
             cs,       // CS
             busy,     // BUSY
             dc,       // DC
             rst,      // RST
-            delay,    // DELAY
+            &mut delay,    // DELAY
         )?;
 
-        Ok(Draw { spi, epd })
+        Ok(Draw {
+            spi,
+            epd,
+            display: Display5in65f::default(),
+            delay,
+        })
     }
 
-    pub fn draw(&mut self, img_data: &[u8], delay: &mut DELAY) -> Result<(), SPI::Error> {
+    pub fn draw(&mut self) -> Result<(), SPI::Error> {
 
-        let mut display = epd_waveshare::epd5in65f::Display5in65f::default();
+        self.epd.wake_up(&mut self.spi, &mut self.delay)?;
 
-        self.epd.wake_up(&mut self.spi, delay)?;
-
-
-        display.clear_buffer(OctColor::Black);
-
-
-        let img: ImageRaw<OctColor> = ImageRaw::new(img_data, WIDTH);
-
-        Image::new(&img, Point::zero()).draw(&mut display).unwrap();
-
-
-        self.epd.update_frame(&mut self.spi, display.buffer(), delay)?;
-        self.epd.display_frame(&mut self.spi, delay)?;
-        delay.delay_ms(255);
-
+        self.epd
+            .update_frame(&mut self.spi, self.display.buffer(), &mut self.delay)?;
+        self.epd.display_frame(&mut self.spi, &mut self.delay)?;
+        self.delay.delay_ms(1000u16);
 
         info!("Display updated!");
 
-
-        self.epd.sleep(&mut self.spi, delay)?;
+        self.epd.sleep(&mut self.spi, &mut self.delay)?;
 
         Ok(())
+    }
+
+    pub async fn run<'a>(&mut self, stack: &Stack<NetDevice<'a>>) {
+        // And now we can use it!
+
+        let mut rx_buffer = [0; 4096];
+        let mut tx_buffer = [0; 4096];
+        let mut buf = [0; 4096];
+
+        loop {
+
+
+            let addr = dns_request(stack).await;
+
+            info!("Got dns address: {}", addr);
+
+
+            info!("Making http request...");
+
+            let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+            socket.set_timeout(Some(embassy_net::SmolDuration::from_secs(10)));
+
+            info!("Connecting to 1.1.1.1....");
+            if let Err(e) = socket
+                .connect((Ipv4Address::new(192, 168, 178, 105), 8080))
+                .await
+            {
+                warn!("error: {:?}", e);
+
+                Timer::after(Duration::from_millis(5000)).await;
+                continue;
+            }
+
+            info!("Received connection from {:?}", socket.remote_endpoint());
+
+            socket.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+
+            let display_buf = self.display.get_mut_buffer();
+            let mut offset = 0;
+            let mut header = true;
+
+            loop {
+                let n = match socket.read(&mut buf).await {
+                    Ok(0) => {
+                        warn!("read EOF");
+                        break;
+                    }
+                    Ok(n) => n,
+                    Err(e) => {
+                        warn!("read error: {:?}", e);
+                        break;
+                    }
+                };
+
+                let body_offset = if header {
+                    let start_pos = buf.windows(4).position(|window| {
+                        window == b"\r\n\r\n"
+                    }).expect("Couldn't find end of http header!") + 4;
+                    let string = core::str::from_utf8(&buf[..start_pos]).unwrap();
+                    header = false;
+                    info!("Header: {}", string);
+                    start_pos
+                } else {
+                    0
+                };
+
+                let source = &buf[body_offset..n];
+
+                let len = source.len();
+
+                let offset_end = usize::min(offset + len, display_buf.len() - 1);
+
+                let target = &mut display_buf[offset..offset_end];
+
+                if target.len() != source.len() {
+                    warn!("Target len({}) didn't match source len({})!", target.len(), source.len());
+                    break;
+                }
+
+                target.copy_from_slice(source);
+                offset += len;
+
+                info!("read {} bytes", n);
+            }
+
+            info!("Drawing...");
+
+            self.draw();
+
+            info!("Finished....");
+
+            Timer::after(Duration::from_millis(60000)).await;
+        }
     }
 }

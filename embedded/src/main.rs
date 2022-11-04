@@ -2,6 +2,9 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
+mod draw;
+mod dns;
+
 use core::convert::Infallible;
 use core::future::Future;
 
@@ -9,14 +12,20 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Stack, StackResources, Ipv4Address};
-use embassy_rp::gpio::{Flex, Level, Output};
+use embassy_rp::gpio::{Flex, Level, Output, Input, Pull};
 use embassy_rp::peripherals::{PIN_23, PIN_24, PIN_25, PIN_29};
 use embassy_time::{Timer, Duration};
 use embedded_hal_1::spi::ErrorType;
+use embedded_hal_1::delay::DelayUs;
 use embedded_hal_async::spi::{ExclusiveDevice, SpiBusFlush, SpiBusRead, SpiBusWrite};
 use embedded_io::asynch::{Read, Write};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+
+use embassy_rp::spi;
+use embassy_rp::spi::{Blocking, Spi};
+
+use draw::Draw;
 
 macro_rules! singleton {
     ($val:expr) => {{
@@ -104,59 +113,40 @@ async fn main(spawner: Spawner) {
         seed
     ));
 
+
+
     unwrap!(spawner.spawn(net_task(stack)));
 
-    // And now we can use it!
-
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-    let mut buf = [0; 4096];
-
-    loop {
-
-        info!("Making http request...");
-
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(embassy_net::SmolDuration::from_secs(10)));
 
 
 
-        info!("Connecting to 1.1.1.1....");
-        if let Err(e) = socket.connect((Ipv4Address::new(192, 168, 178, 105), 8080)).await {
-            warn!("error: {:?}", e);
 
-            Timer::after(Duration::from_millis(5000)).await;
-            continue;
-        }
 
-        info!("Received connection from {:?}", socket.remote_endpoint());
 
-        socket.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+    let mut delay = embassy_time::Delay;
 
-        loop {
-            let n = match socket.read(&mut buf).await {
-                Ok(0) => {
-                    warn!("read EOF");
-                    break;
-                }
-                Ok(n) => n,
-                Err(e) => {
-                    warn!("read error: {:?}", e);
-                    break;
-                }
-            };
+    let mut config = spi::Config::default();
+    config.frequency = 4_000_000; // use the lowest freq
 
-            info!("rxd {:02x}", &buf[..n]);
 
-            let string = core::str::from_utf8(&&buf[..n]).unwrap();
+    let spi_clk = p.PIN_10;
+    let spi_mosi = p.PIN_11;
+    let spi = Spi::new_blocking_txonly(p.SPI1, spi_clk, spi_mosi, config);
 
-            info!("received: {}", string);
-        }
 
-        println!("Finished....");
+    let cs = Output::new(p.PIN_9, Level::High);
+    let busy = Input::new(p.PIN_13, Pull::Up);
+    let dc = Output::new(p.PIN_8, Level::Low);
+    let rst = Output::new(p.PIN_12, Level::Low);
 
-        Timer::after(Duration::from_millis(5000)).await;
-    }
+
+
+    let img_data = include_bytes!("../../image.bin");
+
+    let mut draw = Draw::new(spi, cs, busy, dc, rst).unwrap();
+
+
+    draw.run(stack).await;
 }
 
 struct MySpi {

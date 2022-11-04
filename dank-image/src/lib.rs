@@ -1,9 +1,28 @@
 use std::{collections::HashSet, fs::File, io::Write, path::Path};
 
 use dither::{color::palette, prelude::*};
+use image::ImageFormat;
 
-pub fn dither() -> Result<Vec<u8>> {
-    let img: Img<RGB<f64>> = Img::<RGB<u8>>::load(&Path::new("./image.png"))?
+pub async fn dither(imageUrl: &str) -> Result<Vec<u8>> {
+
+    let img_url = format!("https://img.malmal.io/insecure/w:600/h:448/rt:fill/plain/{imageUrl}@png");
+
+    let result = reqwest::get(img_url).await.unwrap();
+
+    let data = result.bytes().await.unwrap();
+
+    println!("Loaded png data: {}", data.len());
+
+    let img = image::load_from_memory_with_format(&data, ImageFormat::Png).unwrap().to_rgb();
+
+
+    println!("Image size {} {}", img.width(), img.height());
+
+    let img = img.pixels().map(|p| RGB::from(p.0));
+
+
+
+    let img: Img<RGB<f64>> = Img::<RGB<u8>>::new(img, 600).unwrap()
         .convert_with(|rgb| rgb.convert_with(f64::from));
 
     let quantize = dither::create_quantize_n_bits_func(4)?;
