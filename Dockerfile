@@ -20,3 +20,5 @@ WORKDIR /app
 COPY --from=builder /usr/local/cargo/bin/dank-server /app/dank-server
 
 # No CMD or ENTRYPOINT, see fly.toml with `cmd` override.
+
+CMD /app/dank-server

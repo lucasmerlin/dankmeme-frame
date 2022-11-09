@@ -87,7 +87,7 @@ where
         loop {
 
 
-            let addr = dns_request(stack, "dankmeme-gallery.onrender.com.").await.unwrap();
+            let addr = dns_request(stack, "dankmeme-frame.fly.dev.").await.unwrap();
 
             info!("Got dns address: {}", addr);
 
@@ -166,7 +166,7 @@ where
 
             info!("Finished....");
 
-            Timer::after(Duration::from_millis(60000)).await;
+            Timer::after(Duration::from_millis(60 * 20 * 1000)).await;
         }
     }
 }
