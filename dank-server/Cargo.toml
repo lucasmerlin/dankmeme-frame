@@ -11,7 +11,7 @@ warp = "0.3"
 
 dank-image = {path = "../dank-image"}
 
-reqwest = "0.11.12"
+reqwest = {version = "0.11.12", features = ["rustls-tls"], default-features = false}
 anyhow = "1"
 serde = {version =  "1", features = ["derive"]}
 serde_json = "1"

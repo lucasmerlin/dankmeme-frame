@@ -26,7 +26,7 @@ cyw43 = { git = "https://github.com/embassy-rs/cyw43", features = ["defmt"]}
 embassy-executor = { version = "0.1.0",  features = ["defmt", "integrated-timers"] }
 embassy-time = { version = "0.1.0",  features = ["defmt", "defmt-timestamp-uptime"] }
 embassy-rp = { version = "0.1.0",  features = ["defmt", "unstable-traits", "nightly", "unstable-pac", "time-driver"] }
-embassy-net = { version = "0.1.0", features = ["defmt", "tcp", "dhcpv4", "medium-ethernet", "pool-16", "unstable-traits", "nightly"] }
+embassy-net = { version = "0.1.0", features = ["defmt", "tcp", "udp", "dhcpv4", "medium-ethernet", "pool-16", "unstable-traits", "nightly", "proto-ipv6"] }
 atomic-polyfill = "0.1.5"
 static_cell = "1.0"
 

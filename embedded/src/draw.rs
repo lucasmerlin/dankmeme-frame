@@ -87,7 +87,7 @@ where
         loop {
 
 
-            let addr = dns_request(stack).await;
+            let addr = dns_request(stack, "dankmeme-gallery.onrender.com.").await.unwrap();
 
             info!("Got dns address: {}", addr);
 
@@ -99,7 +99,7 @@ where
 
             info!("Connecting to 1.1.1.1....");
             if let Err(e) = socket
-                .connect((Ipv4Address::new(192, 168, 178, 105), 8080))
+                .connect((addr, 80))
                 .await
             {
                 warn!("error: {:?}", e);
@@ -110,7 +110,7 @@ where
 
             info!("Received connection from {:?}", socket.remote_endpoint());
 
-            socket.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+            socket.write_all(b"GET / HTTP/1.0\r\nHost: dankmeme-gallery.onrender.com\r\n\r\n").await.unwrap();
 
             let display_buf = self.display.get_mut_buffer();
             let mut offset = 0;

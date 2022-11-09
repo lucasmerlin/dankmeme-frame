@@ -7,6 +7,8 @@ pub async fn dither(imageUrl: &str) -> Result<Vec<u8>> {
 
     let img_url = format!("https://img.malmal.io/insecure/w:600/h:448/rt:fill/plain/{imageUrl}@png");
 
+    println!("Loading image from: {}", img_url);
+
     let result = reqwest::get(img_url).await.unwrap();
 
     let data = result.bytes().await.unwrap();

@@ -1,0 +1,20 @@
+# flyctl launch added from .gitignore
+target
+
+# flyctl launch added from embedded/.gitignore
+embedded/**/**/*.rs.bk
+embedded/**/.#*
+embedded/**/.gdb_history
+embedded/**/Cargo.lock
+embedded/**/target
+
+# editor files
+embedded/**/.vscode/*
+!embedded/**/.vscode/*.md
+!embedded/**/.vscode/*.svd
+!embedded/**/.vscode/launch.json
+!embedded/**/.vscode/tasks.json
+!embedded/**/.vscode/extensions.json
+!embedded/**/.vscode/settings.json
+
+embedded/**/.env
