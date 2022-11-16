@@ -2,6 +2,8 @@ use cyw43::NetDevice;
 use defmt::{info, warn};
 use embassy_net::{Stack, Ipv4Address};
 use embassy_net::tcp::TcpSocket;
+use embassy_rp::gpio::Input;
+use embassy_rp::peripherals::{PIN_15, PIN_17, PIN_2};
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::image::{Image, ImageRaw};
 use embedded_graphics::prelude::Point;
@@ -13,10 +15,16 @@ use embedded_io::asynch::Write;
 use epd_waveshare::epd5in65f::{Display5in65f, Epd5in65f, WIDTH};
 use epd_waveshare::graphics::OctDisplay;
 use epd_waveshare::prelude::{OctColor, WaveshareDisplay};
+use embassy_futures::select::{select, select3, Either3, select4, Either4};
+use arrform::arrform;
+use arrform::ArrForm;
 
 use crate::dns::dns_request;
 
-pub struct Draw<SPI, CS, BUSY, DC, RST> {
+const MALMAL: &str = "malmal";
+const MEMES: &str = "memes";
+
+pub struct Draw<'a, SPI, CS, BUSY, DC, RST> {
     spi: SPI,
 
     epd: Epd5in65f<SPI, CS, BUSY, DC, RST, Delay>,
@@ -24,9 +32,13 @@ pub struct Draw<SPI, CS, BUSY, DC, RST> {
     display: Display5in65f,
 
     delay: Delay,
+
+    refresh_button: Input<'a, PIN_15>,
+    switch_button: Input<'a, PIN_17>,
+    clear_button: Input<'a, PIN_2>,
 }
 
-impl<SPI, CS, BUSY, DC, RST> Draw<SPI, CS, BUSY, DC, RST>
+impl<'a, SPI, CS, BUSY, DC, RST> Draw<'a, SPI, CS, BUSY, DC, RST>
 where
     SPI: SpiWrite<u8>,
     CS: OutputPin,
@@ -40,7 +52,11 @@ where
         busy: BUSY,
         dc: DC,
         rst: RST,
-    ) -> Result<Draw<SPI, CS, BUSY, DC, RST>, SPI::Error> {
+
+        refresh_button: Input<'a, PIN_15>,
+        switch_button: Input<'a, PIN_17>,
+        clear_button: Input<'a, PIN_2>,
+    ) -> Result<Draw<'a, SPI, CS, BUSY, DC, RST>, SPI::Error> {
 
         let mut delay = Delay;
 
@@ -58,6 +74,9 @@ where
             epd,
             display: Display5in65f::default(),
             delay,
+            refresh_button,
+            switch_button,
+            clear_button,
         })
     }
 
@@ -77,12 +96,28 @@ where
         Ok(())
     }
 
-    pub async fn run<'a>(&mut self, stack: &Stack<NetDevice<'a>>) {
+    pub fn clear(&mut self) -> Result<(), SPI::Error> {
+        self.epd.wake_up(&mut self.spi, &mut self.delay)?;
+
+        self.epd
+        .clear_frame(&mut self.spi, &mut self.delay)?;
+        self.delay.delay_ms(1000u16);
+
+        info!("Display cleared!");
+
+        self.epd.sleep(&mut self.spi, &mut self.delay)?;
+
+        Ok(())
+    }
+
+    pub async fn run<'b>(&mut self, stack: &Stack<NetDevice<'b>>) {
         // And now we can use it!
 
         let mut rx_buffer = [0; 4096];
         let mut tx_buffer = [0; 4096];
         let mut buf = [0; 4096];
+
+        let mut path = MALMAL;
 
         loop {
 
@@ -110,7 +145,9 @@ where
 
             info!("Received connection from {:?}", socket.remote_endpoint());
 
-            socket.write_all(b"GET / HTTP/1.0\r\nHost: dankmeme-gallery.onrender.com\r\n\r\n").await.unwrap();
+            let af = arrform!(512, "GET /{} HTTP/1.0\r\nHost: dankmeme-gallery.onrender.com\r\n\r\n", path);
+
+            socket.write_all(af.as_bytes()).await.unwrap();
 
             let display_buf = self.display.get_mut_buffer();
             let mut offset = 0;
@@ -166,7 +203,27 @@ where
 
             info!("Finished....");
 
-            Timer::after(Duration::from_millis(60 * 20 * 1000)).await;
+            let refresh_timeout = Timer::after(Duration::from_millis(60 * 20 * 1000));
+            let refresh_button = self.refresh_button.wait_for_rising_edge();
+            let switch_button = self.switch_button.wait_for_rising_edge();
+            let clear_button = self.clear_button.wait_for_rising_edge();
+
+            let event = select4(refresh_timeout, refresh_button, switch_button, clear_button).await;
+
+            match event {
+                Either4::Third(_) => {
+                    match path {
+                        MALMAL => path = MEMES,
+                        MEMES => path = MALMAL,
+                        _ => path = MALMAL,
+                    }
+                }
+                Either4::Fourth(_) => {
+                    self.clear().ok();
+                    select(self.refresh_button.wait_for_rising_edge(), Timer::after(Duration::from_secs(60 * 20))).await;
+                }
+                _ => ()
+            }
         }
     }
 }

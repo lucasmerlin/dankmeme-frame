@@ -57,16 +57,20 @@ async fn main(spawner: Spawner) {
 
     let p = embassy_rp::init(Default::default());
 
+    let refresh_btn = Input::new(p.PIN_15, Pull::Up);
+    let switch_btn = Input::new(p.PIN_17, Pull::Up);
+    let clear_btn = Input::new(p.PIN_2, Pull::Up);
+
     // Include the WiFi firmware and Country Locale Matrix (CLM) blobs.
-    // let fw = include_bytes!("../firmware/43439A0.bin");
-    // let clm = include_bytes!("../firmware/43439A0_clm.bin");
+    let fw = include_bytes!("../firmware/43439A0.bin");
+    let clm = include_bytes!("../firmware/43439A0_clm.bin");
 
     // To make flashing faster for development, you may want to flash the firmwares independently
     // at hardcoded addresses, instead of baking them into the program with `include_bytes!`:
     //     probe-rs-cli download firmware/43439A0.bin --format bin --chip RP2040 --base-address 0x10100000
     //     probe-rs-cli download firmware/43439A0_clm.bin --format bin --chip RP2040 --base-address 0x10140000
-    let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) };
-    let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
+    // let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 224190) };
+    // let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
 
     let pwr = Output::new(p.PIN_23, Level::Low);
     let cs = Output::new(p.PIN_25, Level::High);
@@ -95,6 +99,7 @@ async fn main(spawner: Spawner) {
     //control.join_open(env!("WIFI_NETWORK")).await;
     control.join_wpa2(NETWORK, PASSWORD).await;
 
+
     let config = embassy_net::ConfigStrategy::Dhcp;
     //let config = embassy_net::ConfigStrategy::Static(embassy_net::Config {
     //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
@@ -113,12 +118,7 @@ async fn main(spawner: Spawner) {
         seed
     ));
 
-
-
     unwrap!(spawner.spawn(net_task(stack)));
-
-
-
 
 
 
@@ -143,8 +143,9 @@ async fn main(spawner: Spawner) {
 
     let img_data = include_bytes!("../../image.bin");
 
-    let mut draw = Draw::new(spi, cs, busy, dc, rst).unwrap();
+    let mut draw = Draw::new(spi, cs, busy, dc, rst, refresh_btn, switch_btn, clear_btn).unwrap();
 
+    Timer::after(Duration::from_millis(1000 * 10));
 
     draw.run(stack).await;
 }
