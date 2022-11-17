@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs::File, io::Write, path::Path};
+use std::{fs::File, io::Write, path::Path};
 
 use dither::{color::palette, prelude::*};
 
@@ -10,7 +10,7 @@ fn dither() -> Result<()> {
     let img: Img<RGB<f64>> = Img::<RGB<u8>>::load(&Path::new("./image.png"))?
         .convert_with(|rgb| rgb.convert_with(f64::from));
 
-    let quantize = dither::create_quantize_n_bits_func(4)?;
+    let _quantize = dither::create_quantize_n_bits_func(4)?;
     let plt: Vec<_> = palette::parse(include_str!("../../palette.plt")).unwrap();
 
     let dithered_img = ditherer::ATKINSON
@@ -27,7 +27,7 @@ fn dither() -> Result<()> {
                 .chunks_exact(2)
                 .map(|chunk| {
                     plt.iter().position(|col| chunk[1] == *col).unwrap() as u8
-                    | ((plt.iter().position(|col| chunk[0] == *col).unwrap() as u8) << 4)
+                        | ((plt.iter().position(|col| chunk[0] == *col).unwrap() as u8) << 4)
                 })
                 .collect::<Vec<_>>()
                 .as_slice(),

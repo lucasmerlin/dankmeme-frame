@@ -3,12 +3,11 @@ mod utils;
 #[macro_use]
 extern crate lazy_static;
 
-use std::{fs::File, io::Write, path::Path};
+use std::{path::Path};
 
 use dither::{color::palette, prelude::*};
 use image::{
-    imageops::{self, ColorMap, FilterType},
-    ImageBuffer, ImageFormat, Rgb, RgbImage,
+    ImageBuffer, Rgb, RgbImage,
 };
 
 lazy_static! {
@@ -16,7 +15,7 @@ lazy_static! {
 }
 
 pub async fn dither(image: Vec<u8>) -> Result<Vec<u8>> {
-    let mut img: RgbImage = {
+    let img: RgbImage = {
         let mut target = ImageBuffer::from_pixel(600, 448, Rgb { 0: [255, 255, 255] });
         let image = image::load_from_memory(&image).unwrap().into_rgb8();
         utils::fit_image(&mut target, &image);
@@ -33,10 +32,7 @@ pub async fn dither(image: Vec<u8>) -> Result<Vec<u8>> {
         .dither(img, palette::quantize(&PALETTE))
         .convert_with(|rgb| rgb.convert_with(clamp_f64_to_u8));
 
-    dithered_img
-        .clone()
-        .save(Path::new("preview.png"))
-        .unwrap();
+    dithered_img.clone().save(Path::new("preview.png")).unwrap();
 
     let img_4bit = dithered_img
         .into_vec()

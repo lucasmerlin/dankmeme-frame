@@ -1,4 +1,7 @@
-use image::{GenericImage, GenericImageView, imageops::{self, FilterType, ColorMap}};
+use image::{
+    imageops::{self, FilterType},
+    GenericImage, GenericImageView,
+};
 
 pub fn fit_image<I, J>(target: &mut I, source: &J)
 where
@@ -13,7 +16,10 @@ where
 
         imageops::replace(target, image, x, y);
     } else {
-        let scale = f64::min(target.width() as f64 / source.width() as f64, target.height() as f64 / source.height() as f64);
+        let scale = f64::min(
+            target.width() as f64 / source.width() as f64,
+            target.height() as f64 / source.height() as f64,
+        );
         let width = (source.width() as f64 * scale) as u32;
         let height = (source.height() as f64 * scale) as u32;
 
@@ -25,5 +31,3 @@ where
         imageops::replace(target, &image, x, y);
     }
 }
-
-
