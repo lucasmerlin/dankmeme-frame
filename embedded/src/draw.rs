@@ -23,6 +23,7 @@ use crate::dns::dns_request;
 
 const MALMAL: &str = "malmal";
 const MEMES: &str = "memes";
+const DEVIANTART: &str = "deviantart";
 
 pub struct Draw<'a, SPI, CS, BUSY, DC, RST> {
     spi: SPI,
@@ -214,7 +215,8 @@ where
                 Either4::Third(_) => {
                     match path {
                         MALMAL => path = MEMES,
-                        MEMES => path = MALMAL,
+                        MEMES => path = DEVIANTART,
+                        DEVIANTART => path = MALMAL,
                         _ => path = MALMAL,
                     }
                 }

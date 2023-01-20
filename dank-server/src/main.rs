@@ -8,11 +8,11 @@ use warp::{path::Tail, reply::Response, Filter};
 #[tokio::main]
 async fn main() {
     // GET /hello/warp => 200 OK with body "Hello, warp!"
-    let hello = warp::path!("malmal")
+    let malmal = warp::path!("malmal")
         .then(|| async { Response::new(load_malmal_image().await.unwrap().into()) });
-    let _memes = warp::path!("memes")
+    let memes = warp::path!("memes")
         .then(|| async { Response::new(load_reddit_meme().await.unwrap().into()) });
-    let memes = warp::path!("deviantart")
+    let deviantart = warp::path!("deviantart")
         .then(|| async { Response::new(laod_deviantart_iamge().await.unwrap().into()) });
     let url =
         warp::path("image")
@@ -21,7 +21,7 @@ async fn main() {
                 Response::new(load_url(tail.as_str()).await.unwrap().into())
             });
 
-    warp::serve(hello.or(memes).or(url))
+    warp::serve(malmal.or(memes).or(deviantart).or(url))
         .run(([0, 0, 0, 0], 8080))
         .await;
 }
