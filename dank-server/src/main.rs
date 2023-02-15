@@ -27,7 +27,7 @@ async fn main() {
 }
 
 async fn load_malmal_image() -> anyhow::Result<Vec<u8>> {
-    let url = "https://malmal.io/api/gallery/entries?order=TOP&minDate=2021-11-09T22:40:49.187Z&limit=200&offset=0";
+    let url = "https://malmal.io/api/gallery/entries?order=HOT&limit=5&offset=0";
     let response = reqwest::get(url).await?;
     let body = response.text().await?;
 
